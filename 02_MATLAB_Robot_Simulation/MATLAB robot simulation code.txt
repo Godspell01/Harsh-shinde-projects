@@ -1,0 +1,127 @@
+%% CLEAR VISUAL ROBOT MAZE EXPLORATION
+
+clc; clear; close all;
+
+%% STEP 1 — MAZE (10x10 cm grid)
+
+maze = [
+1 1 1 0 1 1 1 1 1 1;
+0 0 1 0 1 0 0 0 0 1;
+1 1 1 1 1 0 1 1 1 1;
+1 0 0 0 1 0 1 0 0 1;
+1 1 1 0 1 1 1 0 1 1;
+1 0 1 0 0 0 1 0 1 0;
+1 0 1 1 1 0 1 1 1 1;
+1 0 0 0 1 0 0 0 0 1;
+1 1 1 0 1 1 1 1 1 1;
+0 0 1 1 1 0 0 0 0 1
+];
+
+maze = logical(maze);
+
+start = [1 1];
+goal  = [10 10];
+
+visited = false(10,10);
+stack = [];
+
+dirs = [ -1 0; 1 0; 0 -1; 0 1 ];
+
+%% STEP 2 — VISUAL SETUP
+
+figure;
+axis equal;
+xlim([0.5 10.5]); ylim([0.5 10.5]);
+set(gca,'YDir','reverse');
+grid on; hold on;
+
+title('Robot Exploring Unknown Maze');
+
+% Draw maze
+for i = 1:10
+    for j = 1:10
+        if maze(i,j) == 0
+            rectangle('Position',[j-0.5 i-0.5 1 1],...
+                'FaceColor','black');
+        else
+            rectangle('Position',[j-0.5 i-0.5 1 1],...
+                'EdgeColor',[0.8 0.8 0.8]);
+        end
+    end
+end
+
+% Robot (red dot)
+robot = plot(start(2), start(1),'ro','MarkerSize',10,'MarkerFaceColor','r');
+
+%% STEP 3 — DFS EXPLORATION
+
+current = start;
+stack = current;
+visited(current(1), current(2)) = true;
+
+found = false;
+
+while ~isempty(stack)
+    
+    current = stack(end,:);
+    
+    % Move robot
+    set(robot,'XData',current(2),'YData',current(1));
+    
+    % Mark explored path (BLUE)
+    rectangle('Position',[current(2)-0.5 current(1)-0.5 1 1],...
+        'FaceColor',[0 0 1 0.4],'EdgeColor','none');
+    
+    if isequal(current, goal)
+        found = true;
+        break;
+    end
+    
+    moved = false;
+    
+    for i = 1:4
+        next = current + dirs(i,:);
+        r = next(1); c = next(2);
+        
+        if r>=1 && r<=10 && c>=1 && c<=10
+            if maze(r,c)==1 && ~visited(r,c)
+                stack = [stack; next];
+                visited(r,c) = true;
+                moved = true;
+                break;
+            end
+        end
+    end
+    
+    if ~moved
+        stack(end,:) = []; % backtrack
+    end
+    
+    pause(0.15);
+end
+
+%% STEP 4 — FINAL PATH FOLLOW (WHITE)
+
+if found
+    final_path = stack;
+    
+    title('Robot Found Exit — Following Path');
+    
+    for i = 1:size(final_path,1)
+        r = final_path(i,1);
+        c = final_path(i,2);
+        
+        % Move robot
+        set(robot,'XData',c,'YData',r);
+        
+        % Final path (WHITE)
+        rectangle('Position',[c-0.5 r-0.5 1 1],...
+            'FaceColor','white','EdgeColor','none');
+        
+        pause(0.2);
+    end
+    
+    title('Final Path Reached ✅');
+else
+    title('No Path Found ❌');
+end
