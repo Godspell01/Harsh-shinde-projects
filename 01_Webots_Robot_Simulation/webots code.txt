@@ -1,0 +1,234 @@
+#include <webots/robot.h>
+#include <webots/motor.h>
+#include <webots/distance_sensor.h>
+#include <webots/position_sensor.h>
+#include <webots/gps.h>
+#include <stdio.h>
+#include <math.h>
+
+#define TIME_STEP 64
+#define ROWS 10
+#define COLS 10
+
+double cell_size = 0.2;
+double arena_size = 2.0;
+
+// Grid
+int grid[ROWS][COLS] = {0};
+
+// Path
+typedef struct { int x, y; } Node;
+Node path[100];
+int path_length = 0;
+int current_target = 0;
+
+// -------- DEFINE OBSTACLES (EDIT IF NEEDED) --------
+void init_grid() {
+  grid[2][2] = 1;
+  grid[2][5] = 1;
+  grid[3][7] = 1;
+  grid[5][3] = 1;
+  grid[6][6] = 1;
+  grid[7][2] = 1;
+}
+
+// -------- BFS --------
+int visited[ROWS][COLS];
+Node parent[ROWS][COLS];
+
+int find_path(int sx, int sy, int gx, int gy) {
+
+  // reset visited
+  for(int i=0;i<ROWS;i++)
+    for(int j=0;j<COLS;j++)
+      visited[i][j]=0;
+
+  Node queue[200];
+  int front = 0, rear = 0;
+
+  queue[rear++] = (Node){sx, sy};
+  visited[sx][sy] = 1;
+
+  int dx[4] = {1,-1,0,0};
+  int dy[4] = {0,0,1,-1};
+
+  while (front < rear) {
+    Node cur = queue[front++];
+
+    if (cur.x == gx && cur.y == gy) {
+
+      int px = gx, py = gy;
+      path_length = 0;
+
+      while (!(px == sx && py == sy)) {
+        path[path_length++] = (Node){px, py};
+        Node p = parent[px][py];
+        px = p.x;
+        py = p.y;
+      }
+
+      // reverse
+      for (int i = 0; i < path_length/2; i++) {
+        Node t = path[i];
+        path[i] = path[path_length-1-i];
+        path[path_length-1-i] = t;
+      }
+
+      return 1;
+    }
+
+    for (int i = 0; i < 4; i++) {
+      int nx = cur.x + dx[i];
+      int ny = cur.y + dy[i];
+
+      if (nx>=0 && ny>=0 && nx<ROWS && ny<COLS &&
+          !visited[nx][ny] && grid[nx][ny]==0) {
+
+        visited[nx][ny] = 1;
+        parent[nx][ny] = cur;
+        queue[rear++] = (Node){nx, ny};
+      }
+    }
+  }
+
+  return 0;
+}
+
+int main() {
+  wb_robot_init();
+
+  // Motors
+  WbDeviceTag left_motor = wb_robot_get_device("left wheel motor");
+  WbDeviceTag right_motor = wb_robot_get_device("right wheel motor");
+
+  wb_motor_set_position(left_motor, INFINITY);
+  wb_motor_set_position(right_motor, INFINITY);
+
+  // Sensors
+  WbDeviceTag ds[8];
+  char ds_names[8][5] = {"ps0","ps1","ps2","ps3","ps4","ps5","ps6","ps7"};
+
+  for(int i = 0; i < 8; i++) {
+    ds[i] = wb_robot_get_device(ds_names[i]);
+    wb_distance_sensor_enable(ds[i], TIME_STEP);
+  }
+
+  // Encoders
+  WbDeviceTag left_ps = wb_motor_get_position_sensor(left_motor);
+  WbDeviceTag right_ps = wb_motor_get_position_sensor(right_motor);
+
+  wb_position_sensor_enable(left_ps, TIME_STEP);
+  wb_position_sensor_enable(right_ps, TIME_STEP);
+
+  // GPS
+  WbDeviceTag gps = wb_robot_get_device("gps");
+  wb_gps_enable(gps, TIME_STEP);
+
+  wb_robot_step(TIME_STEP);
+
+  const double *pos = wb_gps_get_values(gps);
+
+  double robot_x = pos[0];
+  double robot_y = pos[2];
+
+  // 🔥 SHIFT TO GRID
+  int start_x = (int)((robot_x + arena_size/2) / cell_size);
+  int start_y = (int)((robot_y + arena_size/2) / cell_size);
+
+  // clamp
+  if (start_x < 0) start_x = 0;
+  if (start_y < 0) start_y = 0;
+  if (start_x >= ROWS) start_x = ROWS - 1;
+  if (start_y >= COLS) start_y = COLS - 1;
+
+  int goal_x = 8;
+  int goal_y = 8;
+
+  printf("Start: (%d,%d)\n", start_x, start_y);
+  printf("Goal: (%d,%d)\n", goal_x, goal_y);
+
+  init_grid();
+
+  if (!find_path(start_x, start_y, goal_x, goal_y)) {
+    printf("No path found!\n");
+    return 0;
+  }
+
+  printf("Path:\n");
+  for(int i = 0; i < path_length; i++) {
+    printf("(%d,%d)\n", path[i].x, path[i].y);
+  }
+
+  double theta = 0.0;
+
+  double left_prev = wb_position_sensor_get_value(left_ps);
+  double right_prev = wb_position_sensor_get_value(right_ps);
+
+  double wheel_radius = 0.02;
+  double axle_length = 0.052;
+
+  while (wb_robot_step(TIME_STEP) != -1) {
+
+    // -------- ODOMETRY --------
+    double left_now = wb_position_sensor_get_value(left_ps);
+    double right_now = wb_position_sensor_get_value(right_ps);
+
+    double d_left = (left_now - left_prev) * wheel_radius;
+    double d_right = (right_now - right_prev) * wheel_radius;
+
+    left_prev = left_now;
+    right_prev = right_now;
+
+    double d_center = (d_left + d_right) / 2.0;
+    double d_theta = (d_right - d_left) / axle_length;
+
+    theta += d_theta;
+
+    robot_x += d_center * cos(theta);
+    robot_y += d_center * sin(theta);
+
+    int grid_x = (int)((robot_x + arena_size/2) / cell_size);
+    int grid_y = (int)((robot_y + arena_size/2) / cell_size);
+
+    printf("Robot: (%d,%d)\n", grid_x, grid_y);
+
+    // -------- GOAL --------
+    if (current_target >= path_length) {
+      wb_motor_set_velocity(left_motor, 0);
+      wb_motor_set_velocity(right_motor, 0);
+      printf("🎯 GOAL REACHED at (%d,%d)\n", goal_x, goal_y);
+      break;
+    }
+
+    double target_x = path[current_target].x * cell_size - arena_size/2;
+    double target_y = path[current_target].y * cell_size - arena_size/2;
+
+    double dx = target_x - robot_x;
+    double dy = target_y - robot_y;
+
+    double desired_theta = atan2(dy, dx);
+    double error = desired_theta - theta;
+
+    while (error > M_PI) error -= 2*M_PI;
+    while (error < -M_PI) error += 2*M_PI;
+
+    double left_speed, right_speed;
+
+    if (fabs(error) > 0.4) {
+      left_speed = -2.0;
+      right_speed = 2.0;
+    } else {
+      left_speed = 3.0;
+      right_speed = 3.0;
+    }
+
+    wb_motor_set_velocity(left_motor, left_speed);
+    wb_motor_set_velocity(right_motor, right_speed);
+
+    double dist = sqrt(dx*dx + dy*dy);
+    if (dist < 0.05) current_target++;
+  }
+
+  wb_robot_cleanup();
+  return 0;
+}
